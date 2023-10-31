@@ -6,9 +6,8 @@ using System.Data.SqlClient;
 using System.Data;
 using System.Linq;
 using System.Reflection;
-using System.Text;
-using System.Threading.Tasks;
 using SQLTableManagement.Helpers;
+using System.Net;
 
 namespace SQLTableManagement
 {
@@ -29,6 +28,18 @@ namespace SQLTableManagement
         public TableManager(string server, string database, string username, string password)
         {
             SQLConnection = new SqlConnection($"Server={server};Database={database};User Id={username};Password={password};MultipleActiveResultSets=True");
+            SQLConnection.Open();
+        }
+
+        public TableManager(string server, string database, NetworkCredential credential)
+        {
+            SQLConnection = new SqlConnection($"Server={server};Database={database};User Id={credential.UserName};Password={credential.Password};MultipleActiveResultSets=True");
+            SQLConnection.Open();
+        }
+
+        public TableManager(string connString)
+        {
+            SQLConnection = new SqlConnection($"{connString};MultipleActiveResultSets=True");
             SQLConnection.Open();
         }
 
@@ -64,7 +75,7 @@ namespace SQLTableManagement
             List<string> columnNames = new List<string>();
 
             //Iterate over each property with SQL column mapping
-            foreach (MemberInfo columnProperty in typeof(T).GetMembers().Where(x => x.GetCustomAttribute<SQLColumn>() != null))
+            foreach (MemberInfo columnProperty in typeof(T).GetMembers(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(x => x.GetCustomAttribute<SQLColumn>() != null))
             {
                 //Get the column name from property custom attribute
                 string columnName = columnProperty.GetCustomAttribute<SQLColumn>().ColumnName;
@@ -97,16 +108,13 @@ namespace SQLTableManagement
                 Type outputFormat = typeof(T);
 
                 //Create new constructor info to create new object
-                ConstructorInfo outputConstructor = outputFormat.GetConstructor(new Type[] { });
-                //Check if default constructor is found, if not, throw error
-                if (outputConstructor == null)
-                    throw new Exception("No Default Constructor Found!");
+                ConstructorInfo outputConstructor = outputFormat.GetConstructor(new Type[] { }) ?? throw new Exception("No Default Constructor Found!");
 
                 //Invoke and create new instance of object
                 T instance = (T)outputConstructor.Invoke(new object[] { });
 
                 //Get all fields in entity with SQL mapping
-                List<MemberInfo> fields = outputFormat.GetMembers().Where(x => x.GetCustomAttribute<SQLColumn>() != null).ToList();
+                List<MemberInfo> fields = outputFormat.GetMembers(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(x => x.GetCustomAttribute<SQLColumn>() != null).ToList();
                 //Iterate over each column in DataTable
                 foreach (DataColumn column in outputTable.Columns)
                 {
@@ -143,7 +151,7 @@ namespace SQLTableManagement
             SQLTable attribute = entityType.GetCustomAttribute<SQLTable>() ?? throw new Exception("Entity Missing SQLTable Attribute!");
 
             //Get all properties in entity with SQLColumn attribute primary key
-            List<MemberInfo> keyProperties = entityType.GetMembers().Where(x => x.GetCustomAttribute<SQLColumn>()?.PrimaryKey ?? false).ToList();
+            List<MemberInfo> keyProperties = entityType.GetMembers(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(x => x.GetCustomAttribute<SQLColumn>()?.PrimaryKey ?? false).ToList();
             //Create string to store where clause
             string whereQuery = "";
             //Iterate through each key property
@@ -182,7 +190,7 @@ namespace SQLTableManagement
             UploadToTemp(entityTable);
 
             //Insert records into base table
-            _ = new SqlCommand($"INSERT INTO [{entityTable.Prefix}].[{entityTable.TableName}] SELECT * FROM [##{entityTable.TableName}]; DROP TABLE [##{entityTable.TableName}];", SQLConnection).ExecuteNonQuery();
+            _ = new SqlCommand($"INSERT INTO [{entityTable.Prefix}].[{entityTable.TableName}] SELECT * FROM [{entityTable.Prefix}].[##{entityTable.TableName}]; DROP TABLE [{entityTable.Prefix}].[##{entityTable.TableName}];", SQLConnection).ExecuteNonQuery();
 
             //Check if insert recursive is enabled and entity contains load feature
             if (insertRecusrsive && typeof(T).GetInterfaces().Contains(typeof(ISQLTableLoad)))
@@ -214,7 +222,7 @@ namespace SQLTableManagement
             string joinStatement = string.Join(", ", entityTable.PrimaryKey.Select(x => $"t1.[{x.ColumnName}] = t2.[{x.ColumnName}]").ToArray());
 
             //Run Update Statement
-            _ = new SqlCommand($"UPDATE t1 SET {setStatement} FROM [{entityTable.Prefix}].[{entityTable.TableName}] AS t1 INNER JOIN [##{entityTable.TableName}] AS t2 ON {joinStatement}; DROP TABLE [##{entityTable.TableName}]", SQLConnection).ExecuteNonQuery();
+            _ = new SqlCommand($"UPDATE t1 SET {setStatement} FROM [{entityTable.Prefix}].[{entityTable.TableName}] AS t1 INNER JOIN [{entityTable.Prefix}].[##{entityTable.TableName}] AS t2 ON {joinStatement}; DROP TABLE [{entityTable.Prefix}].[##{entityTable.TableName}]", SQLConnection).ExecuteNonQuery();
 
             //Check if insert recursive is enabled and entity contains load feature
             if (updateRecursive && typeof(T).GetInterfaces().Contains(typeof(ISQLTableLoad)))
@@ -270,7 +278,7 @@ namespace SQLTableManagement
 
             //Delete entities from by join
             string deleteKeys = string.Join(", ", entityTable.PrimaryKey.Select(x => $"t1.[{x.ColumnName}] = t2.[{x.ColumnName}]").ToArray());
-            _ = new SqlCommand($"DELETE t1 FROM [{entityTable.Prefix}].[{entityTable.TableName}] AS t1 INNER JOIN [##{entityTable.TableName}] AS t2 ON {deleteKeys}; DROP TABLE [##{entityTable.TableName}];", SQLConnection).ExecuteNonQuery();
+            _ = new SqlCommand($"DELETE t1 FROM [{entityTable.Prefix}].[{entityTable.TableName}] AS t1 INNER JOIN [{entityTable.Prefix}].[##{entityTable.TableName}] AS t2 ON {deleteKeys}; DROP TABLE [{entityTable.Prefix}].[##{entityTable.TableName}];", SQLConnection).ExecuteNonQuery();
 
             //Check if insert recursive is enabled and entity contains load feature
             if (deleteRecursive && typeof(T).GetInterfaces().Contains(typeof(ISQLTableLoad)))
@@ -299,7 +307,7 @@ namespace SQLTableManagement
             };
 
             //Get all properties from the object that are SQL mapped
-            MemberInfo[] properties = entityType.GetMembers().Where(x => x.GetCustomAttribute<SQLColumn>() != null).ToArray();
+            MemberInfo[] properties = entityType.GetMembers(BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance).Where(x => x.GetCustomAttribute<SQLColumn>() != null).ToArray();
             //Iterate over each mapped column
             foreach (MemberInfo property in properties)
                 //Add mapped column to output table
@@ -342,13 +350,13 @@ namespace SQLTableManagement
         private void UploadToTemp(DataTable table)
         {
             //Create Temp Table from Destination Table
-            _ = new SqlCommand($"SELECT TOP 0 * INTO [##{table.TableName}] FROM [{table.Prefix}].[{table.TableName}]", SQLConnection).ExecuteNonQuery();
+            _ = new SqlCommand($"SELECT TOP 0 * INTO [{table.Prefix}].[##{table.TableName}] FROM [{table.Prefix}].[{table.TableName}]", SQLConnection).ExecuteNonQuery();
 
             //Create new Bulk Copy Operation
             using (SqlBulkCopy bulkCopy = new SqlBulkCopy(SQLConnection))
             {
                 //Set Destination Table Name
-                bulkCopy.DestinationTableName = $"##{table.TableName}";
+                bulkCopy.DestinationTableName = $"[{table.Prefix}].[##{table.TableName}]";
 
                 //Map DataTable to temp table
                 foreach (DataColumn column in table.Columns)
